@@ -1,7 +1,8 @@
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-TOKEN = "8799672446:AAEQwNYOhyY0B-NeDrvgL0LHZZKCRn5DHno"
+import os
+TOKEN = os.getenv("TOKEN")
 
 user_data = {}
 
