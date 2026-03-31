@@ -3,13 +3,13 @@ from datetime import datetime
 from threading import Thread
 from flask import Flask
 
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    filters, ContextTypes, ConversationHandler
+    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
+    MessageHandler, filters, ContextTypes, ConversationHandler
 )
 
-# ================= Flask (для Render) =================
+# ================= Flask =================
 app_flask = Flask(__name__)
 
 @app_flask.route("/")
@@ -20,51 +20,73 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app_flask.run(host="0.0.0.0", port=port)
 
-# ================= Telegram Bot =================
+# ================= BOT =================
 TOKEN = os.getenv("TOKEN")
-if not TOKEN:
-    raise ValueError("TOKEN не установлен!")
 
 FUEL, PRICE, DISTANCE = range(3)
-
 history = {}
+
+# Клавиатура
+def main_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Рассчитать", callback_data="calc")],
+        [InlineKeyboardButton("📜 История", callback_data="history")]
+    ])
 
 # /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.effective_user.first_name or "друг"
     await update.message.reply_text(
-        f"Привет, {name}! 🚗\nДавай посчитаем расход топлива.\n"
-        "Введи расход топлива на 100 км:"
+        f"Привет, {name}! 🚗\nВыбери действие:",
+        reply_markup=main_menu()
     )
-    return FUEL
 
-# расход
+# Обработка кнопок
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "calc":
+        await query.message.reply_text("Введи расход топлива на 100 км:")
+        return FUEL
+
+    elif query.data == "history":
+        user_id = query.from_user.id
+        records = history.get(user_id, [])
+
+        if not records:
+            await query.message.reply_text("История пуста.")
+        else:
+            await query.message.reply_text(
+                "📊 История:\n" + "\n".join(records[-5:])
+            )
+
+# ======== ШАГИ ========
+
 async def get_fuel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         r = float(update.message.text.replace(",", "."))
         if r <= 0:
             raise ValueError
         context.user_data['r'] = r
-        await update.message.reply_text("Теперь введи цену литра:")
+        await update.message.reply_text("Введи цену литра:")
         return PRICE
     except:
         await update.message.reply_text("Введите корректное число!")
         return FUEL
 
-# цена
 async def get_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         s = float(update.message.text.replace(",", "."))
         if s <= 0:
             raise ValueError
         context.user_data['s'] = s
-        await update.message.reply_text("Теперь введи расстояние (км):")
+        await update.message.reply_text("Введи расстояние (км):")
         return DISTANCE
     except:
         await update.message.reply_text("Введите корректное число!")
         return PRICE
 
-# расстояние + расчет
 async def get_distance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         d = float(update.message.text.replace(",", "."))
@@ -84,10 +106,14 @@ async def get_distance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"🚗 Топливо: {l:.2f} л\n"
             f"💰 Стоимость: {q:.2f}\n\n"
-            "Удачной поездки! 🎉"
+            "Удачной поездки! 🎉",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Заново", callback_data="calc")],
+                [InlineKeyboardButton("📜 История", callback_data="history")]
+            ])
         )
 
-        # сохраняем историю
+        # история
         user_id = update.effective_user.id
         date = datetime.now().strftime("%d.%m.%Y %H:%M")
         record = f"{date} — {l:.2f} л / {q:.2f} ₽"
@@ -99,38 +125,24 @@ async def get_distance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Введите корректное число!")
         return DISTANCE
 
-# история
-async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    records = history.get(user_id, [])
-
-    if not records:
-        await update.message.reply_text("История пуста.")
-    else:
-        await update.message.reply_text("📊 История:\n" + "\n".join(records[-5:]))
-
-# отмена
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Отменено ❌")
-    return ConversationHandler.END
-
 # ================= Запуск =================
 
 def run_bot():
     app = ApplicationBuilder().token(TOKEN).build()
 
     conv = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+        entry_points=[CallbackQueryHandler(buttons, pattern="calc")],
         states={
             FUEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_fuel)],
             PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_price)],
             DISTANCE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_distance)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[]
     )
 
+    app.add_handler(CommandHandler("start", start))
     app.add_handler(conv)
-    app.add_handler(CommandHandler("history", show_history))
+    app.add_handler(CallbackQueryHandler(buttons))
 
     print("Бот запущен...")
     app.run_polling()
