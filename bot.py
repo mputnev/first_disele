@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import Thread
 from flask import Flask
 
@@ -22,7 +22,6 @@ def run_flask():
 
 # ================= BOT =================
 TOKEN = os.getenv("TOKEN")
-
 FUEL, PRICE, DISTANCE = range(3)
 history = {}
 
@@ -37,7 +36,10 @@ def main_menu():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.effective_user.first_name or "друг"
     await update.message.reply_text(
-        f"Привет, {name}! 🚗\nВыбери действие:",
+        f"Привет, {name}! 🚗\n"
+        "Что умеет этот бот:\n"
+        "- Рассчитать стоимость и количество топлива для вашей поездки\n"
+        "Выбери действие:",
         reply_markup=main_menu()
     )
 
@@ -58,7 +60,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("История пуста.")
         else:
             await query.message.reply_text(
-                "📊 История:\n" + "\n".join(records[-5:])
+                "📊 История последних расчетов:\n" + "\n".join(records[-5:])
             )
 
 # ======== ШАГИ ========
@@ -105,17 +107,17 @@ async def get_distance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(
             f"🚗 Топливо: {l:.2f} л\n"
-            f"💰 Стоимость: {q:.2f}\n\n"
-            "Удачной поездки! 🎉",
+            f"💰 Стоимость: {q:.2f} ₽\n\n"
+            "Соблюдайте ПДД, берегите себя и пассажиров, и удачной поездки! 🎉",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 Заново", callback_data="calc")],
                 [InlineKeyboardButton("📜 История", callback_data="history")]
             ])
         )
 
-        # история
+        # история с корректировкой времени МСК (+3 часа)
         user_id = update.effective_user.id
-        date = datetime.now().strftime("%d.%m.%Y %H:%M")
+        date = (datetime.utcnow() + timedelta(hours=3)).strftime("%d.%m.%Y %H:%M")
         record = f"{date} — {l:.2f} л / {q:.2f} ₽"
         history.setdefault(user_id, []).append(record)
 
