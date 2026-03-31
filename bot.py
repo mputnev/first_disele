@@ -1,65 +1,75 @@
 import os
 from datetime import datetime
+from threading import Thread
+from flask import Flask
+
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     filters, ContextTypes, ConversationHandler
 )
 
+# ================= Flask (для Render) =================
+app_flask = Flask(__name__)
+
+@app_flask.route("/")
+def home():
+    return "Bot is running!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app_flask.run(host="0.0.0.0", port=port)
+
+# ================= Telegram Bot =================
 TOKEN = os.getenv("TOKEN")
 if not TOKEN:
     raise ValueError("TOKEN не установлен!")
 
-# Этапы разговора
 FUEL, PRICE, DISTANCE = range(3)
 
-# Словарь для хранения истории (можно заменить на базу для многопользовательского)
 history = {}
 
-# Команда /start
+# /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_name = update.effective_user.first_name or "друг"
+    name = update.effective_user.first_name or "друг"
     await update.message.reply_text(
-        f"Привет, {user_name}! 🚗\nДавай посчитаем расход топлива.\n"
-        "Сначала введи расход топлива на 100 км (например 7.5):"
+        f"Привет, {name}! 🚗\nДавай посчитаем расход топлива.\n"
+        "Введи расход топлива на 100 км:"
     )
     return FUEL
 
-# Получаем расход
+# расход
 async def get_fuel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         r = float(update.message.text.replace(",", "."))
         if r <= 0:
-            await update.message.reply_text("Расход должен быть больше 0. Попробуй еще раз:")
-            return FUEL
+            raise ValueError
         context.user_data['r'] = r
-        await update.message.reply_text("Отлично! Теперь введи цену литра бензина (например 60):")
+        await update.message.reply_text("Теперь введи цену литра:")
         return PRICE
-    except ValueError:
-        await update.message.reply_text("Ошибка! Введи число:")
+    except:
+        await update.message.reply_text("Введите корректное число!")
         return FUEL
 
-# Получаем цену
+# цена
 async def get_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         s = float(update.message.text.replace(",", "."))
         if s <= 0:
-            await update.message.reply_text("Цена должна быть больше 0. Попробуй еще раз:")
-            return PRICE
+            raise ValueError
         context.user_data['s'] = s
-        await update.message.reply_text("Хорошо! Теперь введи расстояние поездки в километрах (например 200):")
+        await update.message.reply_text("Теперь введи расстояние (км):")
         return DISTANCE
-    except ValueError:
-        await update.message.reply_text("Ошибка! Введи число:")
+    except:
+        await update.message.reply_text("Введите корректное число!")
         return PRICE
 
-# Получаем расстояние и считаем
+# расстояние + расчет
 async def get_distance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         d = float(update.message.text.replace(",", "."))
         if d <= 0:
-            await update.message.reply_text("Расстояние должно быть больше 0. Попробуй еще раз:")
-            return DISTANCE
+            raise ValueError
 
         r = context.user_data['r']
         s = context.user_data['s']
@@ -67,59 +77,64 @@ async def get_distance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         l = (d / 100) * r
         q = l * s
 
-        # Ограничение до 6 цифр
         if l > 999999 or q > 999999:
-            await update.message.reply_text("Сумма или расход слишком большие! 🚨")
+            await update.message.reply_text("Слишком большие значения 🚨")
             return ConversationHandler.END
 
-        msg = (
-            f"Для поездки потребуется 🚗 {l:.2f} литров топлива.\n"
-            f"На сумму 💰 {q:.2f}\n\n"
+        await update.message.reply_text(
+            f"🚗 Топливо: {l:.2f} л\n"
+            f"💰 Стоимость: {q:.2f}\n\n"
             "Удачной поездки! 🎉"
         )
-        await update.message.reply_text(msg)
 
-        # Сохраняем в историю
+        # сохраняем историю
         user_id = update.effective_user.id
-        date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        record = f"{date_str}: {l:.2f} л, {q:.2f} ₽"
+        date = datetime.now().strftime("%d.%m.%Y %H:%M")
+        record = f"{date} — {l:.2f} л / {q:.2f} ₽"
         history.setdefault(user_id, []).append(record)
 
         return ConversationHandler.END
-    except ValueError:
-        await update.message.reply_text("Ошибка! Введи число:")
+
+    except:
+        await update.message.reply_text("Введите корректное число!")
         return DISTANCE
 
-# Команда /history
+# история
 async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     records = history.get(user_id, [])
-    if not records:
-        await update.message.reply_text("История расчетов пуста.")
-    else:
-        await update.message.reply_text("История твоих расчетов:\n" + "\n".join(records))
 
-# Отмена
+    if not records:
+        await update.message.reply_text("История пуста.")
+    else:
+        await update.message.reply_text("📊 История:\n" + "\n".join(records[-5:]))
+
+# отмена
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Расчет отменен ❌")
+    await update.message.reply_text("Отменено ❌")
     return ConversationHandler.END
 
-# Создаем приложение
-app = ApplicationBuilder().token(TOKEN).build()
+# ================= Запуск =================
 
-conv_handler = ConversationHandler(
-    entry_points=[CommandHandler('start', start)],
-    states={
-        FUEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_fuel)],
-        PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_price)],
-        DISTANCE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_distance)],
-    },
-    fallbacks=[CommandHandler('cancel', cancel)]
-)
+def run_bot():
+    app = ApplicationBuilder().token(TOKEN).build()
 
-app.add_handler(conv_handler)
-app.add_handler(CommandHandler('history', show_history))
+    conv = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            FUEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_fuel)],
+            PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_price)],
+            DISTANCE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_distance)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    app.add_handler(conv)
+    app.add_handler(CommandHandler("history", show_history))
+
+    print("Бот запущен...")
+    app.run_polling()
 
 if __name__ == "__main__":
-    print("Бот запущен через polling...")
-    app.run_polling()
+    Thread(target=run_flask).start()
+    run_bot()
