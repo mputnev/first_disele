@@ -40,7 +40,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "🚗 Рассчитать":
         user_data[user_id] = {"step": "r"}
-        await update.message.reply_text("⛽ Введите расход (или сразу: 10 60 200):", reply_markup=cancel_kb)
+        await update.message.reply_text("⛽ Введите расход (или сразу три параметра через пробел: Расход на 100\км | Цена топлива | Необходимое расстояние):", reply_markup=cancel_kb)
         return
 
     parts = text.split()
