@@ -1,95 +1,48 @@
 import os
-from datetime import datetime
-import pytz
-from telegram import Update, ReplyKeyboardMarkup
+from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 TOKEN = os.getenv("TOKEN")
-if TOKEN is None:
-    raise ValueError("TOKEN не найден! Установите переменную окружения.")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # URL Render
 
-user_data = {}
-history = {}
-
-main_kb = ReplyKeyboardMarkup([["🚗 Рассчитать", "📜 История"]], resize_keyboard=True)
-cancel_kb = ReplyKeyboardMarkup([["❌ Отмена"]], resize_keyboard=True)
-
-# Таймзона Москва
-moscow_tz = pytz.timezone("Europe/Moscow")
+if not TOKEN or not WEBHOOK_URL:
+    raise ValueError("TOKEN или WEBHOOK_URL не установлены!")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет 👋 Выбери действие:", reply_markup=main_kb)
+    await update.message.reply_text(
+        "Привет! 🚗\nЯ могу посчитать расход топлива для поездки.\n"
+        "Напиши данные в формате: расход_на_100_км, стоимость_литра, расстояние_поездки\n"
+        "Пример: 7.5, 60, 200"
+    )
 
-async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    text = update.message.text
-
-    if text == "❌ Отмена":
-        user_data[user_id] = {}
-        await update.message.reply_text("Отменено ❌", reply_markup=main_kb)
-        return
-
-    if text == "📜 История":
-        user_history = history.get(user_id, [])
-        if not user_history:
-            await update.message.reply_text("История пуста 📭", reply_markup=main_kb)
-            return
-        msg = "📜 Последние расчёты:\n\n" + "\n\n".join(user_history[-5:])
-        await update.message.reply_text(msg, reply_markup=main_kb)
-        return
-
-    if text == "🚗 Рассчитать":
-        user_data[user_id] = {"step": "r"}
-        await update.message.reply_text("⛽ Введите расход (или сразу три параметра через пробел: Расход на 100\км | Цена топлива | Необходимое расстояние):", reply_markup=cancel_kb)
-        return
-
-    parts = text.split()
-    if len(parts) == 3:
-        try:
-            r, s, d = map(float, parts)
-            await calculate_and_send(update, user_id, r, s, d)
-            return
-        except:
-            pass
-
-    if user_id not in user_data:
-        await update.message.reply_text("Нажми кнопку 👇", reply_markup=main_kb)
-        return
-
-    data = user_data[user_id]
+async def calculate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.replace(",", " ").split()
     try:
-        value = float(text)
-    except:
-        await update.message.reply_text("❌ Введите число!")
-        return
+        if len(text) < 3:
+            await update.message.reply_text("Ошибка: нужно 3 числа (расход, цена, расстояние)")
+            return
+        r = float(text[0])      # расход на 100 км
+        s = float(text[1])      # цена литра
+        d = float(text[2])      # расстояние
+        if r <= 0 or s <= 0 or d <= 0:
+            await update.message.reply_text("Все числа должны быть больше 0")
+            return
+        l = (d / 100) * r
+        q = l * s
+        await update.message.reply_text(f"Для поездки потребуется {l:.2f} литров топлива.\nНа сумму {q:.2f}")
+    except ValueError:
+        await update.message.reply_text("Ошибка: введи числа корректно через пробел или запятую")
 
-    if data["step"] == "r":
-        data["r"] = value
-        data["step"] = "s"
-        await update.message.reply_text("💰 Введите цену:")
-    elif data["step"] == "s":
-        data["s"] = value
-        data["step"] = "d"
-        await update.message.reply_text("📍 Введите расстояние:")
-    elif data["step"] == "d":
-        data["d"] = value
-        await calculate_and_send(update, user_id, data["r"], data["s"], data["d"])
-
-async def calculate_and_send(update, user_id, r, s, d):
-    l = (d / 100) * r
-    q = l * s
-    now = datetime.now(moscow_tz).strftime("%d.%m.%Y %H:%M")  # дата и время по Москве
-
-    result = f"{now} — ⛽ {l:.2f} л | 💸 {q:.2f}"
-
-    await update.message.reply_text(f"🚗 *Результат:*\n\n{result}", parse_mode="Markdown")
-
-    history.setdefault(user_id, []).append(result)
-    user_data[user_id] = {}
-    await update.message.reply_text("Готово ✅", reply_markup=main_kb)
-
-# Запуск
+# Создание приложения
 app = ApplicationBuilder().token(TOKEN).build()
 app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
-app.run_polling()
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, calculate))
+
+# Настройка Webhook
+PORT = int(os.getenv("PORT", 8443))
+app.bot.set_webhook(f"{WEBHOOK_URL}/{TOKEN}")
+app.run_webhook(
+    listen="0.0.0.0",
+    port=PORT,
+    webhook_path=f"/{TOKEN}"
+)
