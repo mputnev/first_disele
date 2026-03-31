@@ -1,13 +1,17 @@
+import os
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-import os
-TOKEN = os.getenv("TOKEN")
+TOKEN = os.getenv("TOKEN")  # обязательно: токен хранится в переменной окружения
+
+if TOKEN is None:
+    raise ValueError("TOKEN не найден! Установите переменную окружения.")
 
 user_data = {}
+history = {}
 
-# клавиатуры
-main_kb = ReplyKeyboardMarkup([["🚗 Рассчитать топливо"]], resize_keyboard=True)
+# клавиатура
+main_kb = ReplyKeyboardMarkup([["🚗 Рассчитать", "📜 История"]], resize_keyboard=True)
 cancel_kb = ReplyKeyboardMarkup([["❌ Отмена"]], resize_keyboard=True)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -17,66 +21,71 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text
 
-    # отмена
     if text == "❌ Отмена":
         user_data[user_id] = {}
         await update.message.reply_text("Отменено ❌", reply_markup=main_kb)
         return
 
-    # запуск
-    if text == "🚗 Рассчитать топливо":
-        user_data[user_id] = {"step": "r"}
-        await update.message.reply_text("⛽ Введите расход (л/100 км):", reply_markup=cancel_kb)
+    if text == "📜 История":
+        user_history = history.get(user_id, [])
+        if not user_history:
+            await update.message.reply_text("История пуста 📭", reply_markup=main_kb)
+            return
+        msg = "📜 Последние расчёты:\n\n" + "\n\n".join(user_history[-5:])
+        await update.message.reply_text(msg, reply_markup=main_kb)
         return
+
+    if text == "🚗 Рассчитать":
+        user_data[user_id] = {"step": "r"}
+        await update.message.reply_text("⛽ Введите расход (или сразу: 10 60 200):", reply_markup=cancel_kb)
+        return
+
+    # быстрый ввод одной строкой
+    parts = text.split()
+    if len(parts) == 3:
+        try:
+            r, s, d = map(float, parts)
+            await calculate_and_send(update, user_id, r, s, d)
+            return
+        except:
+            pass
 
     if user_id not in user_data:
         await update.message.reply_text("Нажми кнопку 👇", reply_markup=main_kb)
         return
 
     data = user_data[user_id]
-
-    # проверка числа
     try:
         value = float(text)
     except:
         await update.message.reply_text("❌ Введите число!")
         return
 
-    # шаги
     if data["step"] == "r":
         data["r"] = value
         data["step"] = "s"
-        await update.message.reply_text("💰 Введите цену за литр:")
-    
+        await update.message.reply_text("💰 Введите цену:")
     elif data["step"] == "s":
         data["s"] = value
         data["step"] = "d"
-        await update.message.reply_text("📍 Введите расстояние (км):")
-    
+        await update.message.reply_text("📍 Введите расстояние:")
     elif data["step"] == "d":
         data["d"] = value
+        await calculate_and_send(update, user_id, data["r"], data["s"], data["d"])
 
-        r = data["r"]
-        s = data["s"]
-        d = data["d"]
+async def calculate_and_send(update, user_id, r, s, d):
+    l = (d / 100) * r
+    q = l * s
+    result = f"⛽ {l:.2f} л | 💸 {q:.2f}"
 
-        l = (d / 100) * r
-        q = l * s
+    await update.message.reply_text(f"🚗 *Результат:*\n\n{result}", parse_mode="Markdown")
 
-        await update.message.reply_text(
-            f"🚗 *Результат:*\n\n"
-            f"⛽ Топливо: *{l:.2f} л*\n"
-            f"💸 Стоимость: *{q:.2f}*",
-            parse_mode="Markdown"
-        )
-
-        user_data[user_id] = {}
-        await update.message.reply_text("Готово ✅", reply_markup=main_kb)
+    history.setdefault(user_id, []).append(result)
+    user_data[user_id] = {}
+    await update.message.reply_text("Готово ✅", reply_markup=main_kb)
 
 # запуск
 app = ApplicationBuilder().token(TOKEN).build()
-
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
-
 app.run_polling()
